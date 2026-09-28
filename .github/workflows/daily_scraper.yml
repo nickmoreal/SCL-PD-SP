@@ -1,1 +1,83 @@
+name: 🕷️ Scheels Daily Product Scraper
 
+on:
+  # ─── AUTOMATIC SCHEDULE ───────────────────────────────────────────────────
+  # Roz raat 9:30 PM IST (4:00 PM UTC) auto chalega
+  # Aap time change karna chahein to: https://crontab.guru/ pe check karo
+  schedule:
+    - cron: '0 16 * * *'   # 4:00 PM UTC = 9:30 PM IST daily
+
+  # ─── MANUAL TRIGGER (Mobile/Browser se button dabao) ─────────────────────
+  workflow_dispatch:
+    inputs:
+      sheet_name:
+        description: 'Google Sheet name (e.g. Scheels_Products)'
+        required: false
+        default: 'Scheels_Products'
+      mode:
+        description: 'Scrape mode: auto | fast | stealth | interactive'
+        required: false
+        default: 'auto'
+
+jobs:
+  scrape:
+    name: 🔍 Scrape & Sync to Google Sheets
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      # ── 1. Code checkout ──────────────────────────────────────────────────
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ───────────────────────────────────────────────────
+      - name: 🐍 Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # ── 3. Install Python dependencies ────────────────────────────────────
+      - name: 📦 Install Python Packages
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── 4. Install Playwright browsers ────────────────────────────────────
+      - name: 🌐 Install Playwright Chromium Browser
+        run: |
+          playwright install chromium --with-deps
+
+      # ── 5. Run the scraper ────────────────────────────────────────────────
+      - name: 🕷️ Run Scheels Scraper → Google Sheets
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SHEET_NAME: ${{ github.event.inputs.sheet_name || 'Scheels_Products' }}
+          SCRAPE_MODE: ${{ github.event.inputs.mode || 'auto' }}
+        run: |
+          python sheets_runner.py
+
+      # ── 6. Upload Excel backup as GitHub Artifact ─────────────────────────
+      - name: 📗 Upload Excel Backup File
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scraped-products-${{ github.run_number }}
+          path: output/*.xlsx
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ── 7. Show run summary ───────────────────────────────────────────────
+      - name: ✅ Run Summary
+        if: always()
+        run: |
+          echo "### 🕷️ Scheels Scraper Run Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Sheet Name | $SHEET_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scrape Mode | $SCRAPE_MODE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run Number | ${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📁 Excel file available in Artifacts tab (30 days tak)" >> $GITHUB_STEP_SUMMARY
