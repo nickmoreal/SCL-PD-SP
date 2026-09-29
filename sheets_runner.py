@@ -17,14 +17,12 @@ SCOPES = [
 
 def get_gspread_client():
     """Authenticate with Google Sheets via Service Account JSON file or Environment Variable."""
-    # Check if JSON string is provided in environment (for GitHub Actions Secrets)
     creds_json_str = os.environ.get("GCP_SA_KEY")
     if creds_json_str:
         info = json.loads(creds_json_str)
         creds = Credentials.from_service_account_info(info, scopes=SCOPES)
         return gspread.authorize(creds)
 
-    # Local fallback file
     local_creds_path = "credentials.json"
     if os.path.exists(local_creds_path):
         creds = Credentials.from_service_account_file(local_creds_path, scopes=SCOPES)
@@ -48,7 +46,6 @@ def run_sheets_scraper():
     try:
         input_ws = sh.worksheet("Input_URLs")
     except gspread.exceptions.WorksheetNotFound:
-        # Create it if it doesn't exist
         input_ws = sh.add_worksheet(title="Input_URLs", rows=100, cols=2)
         input_ws.update("A1", [["Product_URL"]])
         print("[Sheets] Created 'Input_URLs' sheet. Please paste URLs in column A.")
@@ -61,48 +58,77 @@ def run_sheets_scraper():
         print("[Sheets] No URLs found in 'Input_URLs' sheet. Exiting.")
         return
 
-    print(f"[Sheets] Found {len(urls)} URLs to scrape.")
+    total = len(urls)
+    print(f"[Sheets] Found {total} URLs to scrape. Starting high-speed processing...")
 
-    # 2. Scrape each URL
-    extractor = ProductExtractor()
-    extracted_products: List[ProductDetail] = []
-
-    for idx, url in enumerate(urls, 1):
-        print(f"[{idx}/{len(urls)}] Scraping: {url}...")
-        try:
-            prod = extractor.extract_from_url(url, mode=mode)
-            extracted_products.append(prod)
-            print(f"   -> Success: {prod.title[:40]} | Variants: {len(prod.variants)}")
-        except Exception as e:
-            print(f"   -> Error on {url}: {e}")
-        time.sleep(1.5)  # respectful delay
-
-    if not extracted_products:
-        print("[Sheets] No products extracted. Done.")
-        return
-
-    # 3. Update 'Products' sheet
+    # 2. Setup worksheets
     try:
         prod_ws = sh.worksheet("Products")
     except gspread.exceptions.WorksheetNotFound:
-        prod_ws = sh.add_worksheet(title="Products", rows=1000, cols=20)
+        prod_ws = sh.add_worksheet(title="Products", rows=max(1000, total + 100), cols=20)
 
-    prod_rows = [p.to_summary_dict() for p in extracted_products]
+    try:
+        var_ws = sh.worksheet("Variants")
+    except gspread.exceptions.WorksheetNotFound:
+        var_ws = sh.add_worksheet(title="Variants", rows=max(5000, total * 5), cols=15)
+
+    # 3. Scrape using persistent browser
+    extractor = ProductExtractor()
+    extracted_products: List[ProductDetail] = []
+    start_time = time.time()
+
+    try:
+        for idx, url in enumerate(urls, 1):
+            t0 = time.time()
+            try:
+                prod = extractor.extract_from_url(url, mode=mode)
+                extracted_products.append(prod)
+                dur = round(time.time() - t0, 2)
+                print(f"[{idx}/{total}] ({dur}s) Success: {prod.title[:45]} | Variants: {len(prod.variants)}")
+            except Exception as e:
+                dur = round(time.time() - t0, 2)
+                print(f"[{idx}/{total}] ({dur}s) Error on {url[:45]}: {str(e)[:60]}")
+
+            # Periodic batch sync every 100 products to prevent any data loss
+            if idx % 100 == 0:
+                print(f"--- [Progress: {idx}/{total}] Syncing batch to Google Sheets ---")
+                _sync_to_sheets(prod_ws, var_ws, extracted_products)
+
+    finally:
+        extractor.close()
+
+    total_time = round((time.time() - start_time) / 60, 2)
+    print(f"\n[Scraper Complete] Extracted {len(extracted_products)} products in {total_time} minutes.")
+
+    # 4. Final Sync to Google Sheets
+    if extracted_products:
+        print("[Sheets] Performing final Google Sheets update...")
+        _sync_to_sheets(prod_ws, var_ws, extracted_products)
+
+        # 5. Local Excel backup for GitHub Artifacts
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        os.makedirs("output", exist_ok=True)
+        excel_path = f"output/scraped_products_{timestamp}.xlsx"
+        ProductExporter.to_excel(extracted_products, excel_path)
+        print(f"[Backup] Saved Excel backup to {excel_path}")
+
+
+def _sync_to_sheets(prod_ws, var_ws, products: List[ProductDetail]):
+    """Helper to cleanly sync Products and Variants to Google Sheets."""
+    if not products:
+        return
+
+    # Sync Products Tab
+    prod_rows = [p.to_summary_dict() for p in products]
     if prod_rows:
         headers = list(prod_rows[0].keys())
         data_matrix = [headers] + [[r.get(h, "") for h in headers] for r in prod_rows]
         prod_ws.clear()
         prod_ws.update("A1", data_matrix)
-        print(f"[Sheets] Updated 'Products' tab with {len(prod_rows)} items.")
 
-    # 4. Update 'Variants' sheet
-    try:
-        var_ws = sh.worksheet("Variants")
-    except gspread.exceptions.WorksheetNotFound:
-        var_ws = sh.add_worksheet(title="Variants", rows=5000, cols=15)
-
+    # Sync Variants Tab
     variant_rows = []
-    for p in extracted_products:
+    for p in products:
         if p.variants:
             for v in p.variants:
                 variant_rows.append([
@@ -138,14 +164,6 @@ def run_sheets_scraper():
     var_matrix = [var_headers] + variant_rows
     var_ws.clear()
     var_ws.update("A1", var_matrix)
-    print(f"[Sheets] Updated 'Variants' tab with {len(variant_rows)} variant rows.")
-
-    # Also save local backup Excel file
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    os.makedirs("output", exist_ok=True)
-    excel_path = f"output/scraped_products_{timestamp}.xlsx"
-    ProductExporter.to_excel(extracted_products, excel_path)
-    print(f"[Backup] Saved Excel backup to {excel_path}")
 
 
 if __name__ == "__main__":
