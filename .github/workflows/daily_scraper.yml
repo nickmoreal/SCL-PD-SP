@@ -2,10 +2,10 @@ name: 🕷️ Scheels Daily Product Scraper
 
 on:
   # ─── AUTOMATIC SCHEDULE ───────────────────────────────────────────────────
-  # Roz raat 9:30 PM IST (4:00 PM UTC) auto chalega
+  # Roz Evening 5:00 PM IST (4:00 PM UTC) auto chalega
   # Aap time change karna chahein to: https://crontab.guru/ pe check karo
   schedule:
-    - cron: '0 16 * * *'   # 4:00 PM UTC = 9:30 PM IST daily
+    - cron: '30 11 * * *'   # 4:00 PM UTC = 5:00 PM IST daily
 
   # ─── MANUAL TRIGGER (Mobile/Browser se button dabao) ─────────────────────
   workflow_dispatch:
