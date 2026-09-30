@@ -26,22 +26,10 @@ class ProductExtractor:
         return product
 
     def extract_from_url(self, url: str, mode: str = "auto") -> ProductDetail:
-        html = None
-        fetch_method = "Unknown"
-
-        if mode == "auto":
-            # For Scheels and protected sites, use the persistent stealth browser directly for maximum speed and zero 403s
-            html, fetch_method = self.fetcher.fetch_browser_fast(url)
-            if not html or "Just a moment..." in html:
-                # Fallback to fast HTTP if browser had issue
-                html, code, fetch_method = self.fetcher.fetch_fast(url)
-        elif mode == "fast":
-            html, code, fetch_method = self.fetcher.fetch_fast(url)
-        elif mode in ["stealth", "interactive"]:
-            html, fetch_method = self.fetcher.fetch_browser_fast(url)
+        html, method = self.fetcher.fetch(url)
 
         if not html:
-            raise ValueError(f"Failed to fetch content from {url} ({fetch_method})")
+            raise ValueError(f"Failed to fetch content from {url} ({method})")
 
         product = self.extract_from_html(html, url)
         return product

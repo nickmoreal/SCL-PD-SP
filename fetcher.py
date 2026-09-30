@@ -9,36 +9,58 @@ from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
 class PageFetcher:
     """
-    Cloudflare-Resistant Stealth Page Fetcher for GitHub Actions & Cloud Runners:
-    - Persistent Playwright context with real browser fingerprinting.
-    - Cloudflare Turnstile bypass handling with dynamic challenge waits.
-    - Automatic curl_cffi TLS impersonation fallback.
+    High-Reliability Multi-Tier Page Fetcher:
+    Tier 1: TLS Fingerprint Impersonation (curl_cffi with browser headers) - Fast & Bypasses Cloudflare
+    Tier 2: Real Headless Chromium with Challenge Resolver & Navigation Delays
     """
 
     def __init__(self, proxy: Optional[str] = None):
         self.proxy = proxy
-        self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         self.headers = {
-            "User-Agent": self.user_agent,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "sec-ch-ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1"
         }
+        self._session = None
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
 
+    def _get_session(self):
+        if self._session is None:
+            self._session = cffi_requests.Session(impersonate="chrome124")
+        return self._session
+
+    def fetch_fast_tls(self, url: str) -> Tuple[Optional[str], int, str]:
+        """Direct TLS Fingerprint fetch using persistent session with realistic headers."""
+        try:
+            session = self._get_session()
+            proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+            resp = session.get(
+                url,
+                headers=self.headers,
+                proxies=proxies,
+                timeout=18
+            )
+            text = resp.text
+            if resp.status_code == 200:
+                if "Just a moment..." not in text and ("@type" in text or "product" in text.lower()):
+                    return text, 200, "Fast TLS HTTP"
+            return text, resp.status_code, f"HTTP {resp.status_code} (Challenge)"
+        except Exception as e:
+            return None, 0, f"TLS Error: {str(e)}"
+
     def _ensure_browser(self):
-        """Initializes stealth browser context with anti-detection scripts."""
         if self._page is not None and not self._page.is_closed():
             return
 
@@ -61,12 +83,10 @@ class PageFetcher:
         self._browser = self._playwright.chromium.launch(**launch_kwargs)
         self._context = self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent=self.user_agent,
-            locale="en-US",
-            timezone_id="America/Chicago"
+            user_agent=self.headers["User-Agent"],
+            locale="en-US"
         )
 
-        # Inject stealth scripts to hide automation
         self._context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             window.chrome = { runtime: {} };
@@ -76,58 +96,61 @@ class PageFetcher:
 
         self._page = self._context.new_page()
 
-    def fetch_browser_fast(self, url: str, timeout_sec: int = 25) -> Tuple[Optional[str], str]:
-        """Navigates to URL and waits through Cloudflare challenges automatically."""
+    def fetch_browser_stealth(self, url: str, timeout_sec: int = 30) -> Tuple[Optional[str], str]:
+        """Browser fetch that waits for Cloudflare Turnstile to solve before capturing content."""
         try:
             self._ensure_browser()
             self._page.goto(url, wait_until="domcontentloaded", timeout=timeout_sec * 1000)
 
-            # Check for Cloudflare Turnstile / Challenge
-            for i in range(12):
+            # Wait for legit title and content
+            for _ in range(15):
                 title = self._page.title()
-                # If page is legitimate and not a challenge page
-                if title and "Just a moment" not in title and "Attention Required" not in title and "Cloudflare" not in title:
+                if title and not any(k in title.lower() for k in ["just a moment", "attention required", "cloudflare", "challenge"]):
                     break
                 time.sleep(1)
 
-            # Give a brief moment for dynamic hydration
-            time.sleep(1.2)
+            # Allow React/Next.js hydration
+            time.sleep(1.5)
             content = self._page.content()
 
             if "Just a moment..." in content and "Challenge" in content:
-                # Still challenge? Try TLS HTTP fallback
-                return self.fetch_fast(url)
+                # If still challenge in browser, fallback to TLS
+                res, code, method = self.fetch_fast_tls(url)
+                if res and "Just a moment..." not in res:
+                    return res, method
+                return None, "Blocked by Challenge"
 
-            return content, "Stealth Persistent Browser"
+            return content, "Stealth Browser"
         except Exception as e:
-            # Fallback to fast TLS curl_cffi on browser error
-            res, code, method = self.fetch_fast(url)
-            if res and "Just a moment..." not in res:
-                return res, method
-            return None, f"Browser Fetch Error: {str(e)}"
+            try:
+                if self._page:
+                    self._page.close()
+                self._page = self._context.new_page() if self._context else None
+            except Exception:
+                pass
+            return None, f"Browser Error: {str(e)}"
 
-    def fetch_fast(self, url: str) -> Tuple[Optional[str], int, str]:
-        """Fast HTTP request with Chrome 124 TLS fingerprint impersonation."""
-        try:
-            proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-            resp = cffi_requests.get(
-                url,
-                impersonate="chrome124",
-                headers=self.headers,
-                proxies=proxies,
-                timeout=15
-            )
-            if resp.status_code == 200 and "Just a moment..." not in resp.text:
-                return resp.text, 200, "Fast TLS HTTP"
-            return resp.text, resp.status_code, f"HTTP {resp.status_code} (Challenge)"
-        except Exception as e:
-            return None, 0, f"Error: {str(e)}"
+    def fetch(self, url: str) -> Tuple[Optional[str], str]:
+        """Dual-strategy fetch with automatic retry."""
+        # Step 1: Try stealth browser
+        html, method = self.fetch_browser_stealth(url)
+        if html and "Just a moment..." not in html:
+            return html, method
 
-    def fetch_stealth_browser(self, url: str, timeout_sec: int = 25) -> Tuple[Optional[str], str]:
-        return self.fetch_browser_fast(url, timeout_sec)
+        # Step 2: Fallback to Fast TLS session
+        html, code, method = self.fetch_fast_tls(url)
+        if html and "Just a moment..." not in html:
+            return html, method
+
+        # Step 3: Wait 2s and retry once
+        time.sleep(2)
+        html, method = self.fetch_browser_stealth(url, timeout_sec=35)
+        if html and "Just a moment..." not in html:
+            return html, method
+
+        return None, "Failed after retries"
 
     def close(self):
-        """Closes browser session."""
         try:
             if self._page and not self._page.is_closed():
                 self._page.close()
