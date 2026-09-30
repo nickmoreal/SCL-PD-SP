@@ -7,118 +7,103 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 
-try:
-    from playwright_stealth import stealth_sync
-except ImportError:
-    stealth_sync = None
-
 
 class PageFetcher:
     """
-    Cloudflare Bypass Engine for GitHub Actions & Cloud:
-    - Persistent user profile keeps cf_clearance cookies active across all URLs.
-    - Full stealth evasion masking headless automation markers.
-    - Rapid tab lifecycle with zero session carry-over locks.
+    Production-Grade Dual Tier Fetcher:
+    Tier 1: curl_cffi TLS impersonation with Chrome 124 TLS cipher fingerprint.
+    Tier 2: Headful/Stealth Playwright Chromium with persistent session storage.
     """
 
     def __init__(self, proxy: Optional[str] = None):
         self.proxy = proxy
-        self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1"
+        }
+        self._session = None
         self._playwright = None
         self._context: Optional[BrowserContext] = None
-        self._user_data_dir = os.path.join(tempfile.gettempdir(), "scheels_browser_profile")
-        os.makedirs(self._user_data_dir, exist_ok=True)
 
-    def _ensure_context(self):
+    def _get_http_session(self):
+        if self._session is None:
+            self._session = cffi_requests.Session(impersonate="chrome124")
+        return self._session
+
+    def fetch_fast_tls(self, url: str) -> Tuple[Optional[str], int, str]:
+        """Fast HTTP request with TLS fingerprint impersonation."""
+        try:
+            session = self._get_http_session()
+            proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+            resp = session.get(
+                url,
+                headers=self.headers,
+                proxies=proxies,
+                timeout=15
+            )
+            text = resp.text
+            if resp.status_code == 200 and "Just a moment..." not in text:
+                return text, 200, "Fast TLS HTTP"
+            return text, resp.status_code, f"HTTP {resp.status_code}"
+        except Exception as e:
+            return None, 0, f"TLS Error: {str(e)}"
+
+    def _ensure_browser(self):
         if self._playwright is None:
             self._playwright = sync_playwright().start()
 
         if self._context is None:
-            launch_args = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-infobars",
-                "--window-size=1920,1080",
-                "--lang=en-US,en"
-            ]
+            user_data = os.path.expanduser(r"~\.gemini\antigravity\scratch\browser_session")
+            os.makedirs(user_data, exist_ok=True)
             
-            kwargs = {
-                "user_data_dir": self._user_data_dir,
-                "headless": True,
-                "viewport": {"width": 1920, "height": 1080},
-                "user_agent": self.user_agent,
-                "locale": "en-US",
-                "timezone_id": "America/Chicago",
-                "args": launch_args,
-                "ignore_default_args": ["--enable-automation"]
-            }
-            if self.proxy:
-                kwargs["proxy"] = {"server": self.proxy}
+            self._context = self._playwright.chromium.launch_persistent_context(
+                user_data_dir=user_data,
+                headless=False,
+                viewport={"width": 1366, "height": 768},
+                user_agent=self.headers["User-Agent"],
+                args=["--disable-blink-features=AutomationControlled"]
+            )
 
-            self._context = self._playwright.chromium.launch_persistent_context(**kwargs)
-
-    def fetch_browser_stealth(self, url: str, timeout_sec: int = 25) -> Tuple[Optional[str], str]:
-        page = None
+    def fetch_browser(self, url: str, timeout_sec: int = 30) -> Tuple[Optional[str], str]:
         try:
-            self._ensure_context()
-            page = self._context.new_page()
+            self._ensure_browser()
+            page = self._context.pages[0] if self._context.pages else self._context.new_page()
 
-            # Apply playwright-stealth if installed
-            if stealth_sync:
-                stealth_sync(page)
-
-            # Block heavy tracking ads only
-            def ad_filter(route):
-                u = route.request.url.lower()
-                if any(ad in u for ad in ["google-analytics", "doubleclick", "clarip", "klaviyo", "tiktok", "snapchat", "pinterest", "facebook"]):
-                    route.abort()
-                else:
-                    route.continue_()
-
-            page.route("**/*", ad_filter)
-
-            # Navigate to product URL
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_sec * 1000)
 
-            # Wait for legit product page or title
-            for _ in range(12):
+            for _ in range(15):
                 title = page.title()
-                if title and not any(k in title.lower() for k in ["just a moment", "attention required", "cloudflare", "challenge"]):
+                if title and not any(k in title.lower() for k in ["just a moment", "attention required", "cloudflare"]):
                     break
                 time.sleep(0.8)
 
-            time.sleep(1.0)
+            time.sleep(1.2)
             content = page.content()
-
-            if "Just a moment..." in content and "Challenge" in content:
-                return None, "Blocked by Challenge"
-
-            return content, "Stealth Persistent Context"
+            return content, "Browser Session"
         except Exception as e:
             return None, f"Browser Error: {str(e)}"
-        finally:
-            if page and not page.is_closed():
-                try:
-                    page.close()
-                except Exception:
-                    pass
 
     def fetch(self, url: str) -> Tuple[Optional[str], str]:
-        # Pacing between requests
-        time.sleep(random.uniform(0.8, 1.5))
-
-        html, method = self.fetch_browser_stealth(url)
+        # Strategy 1: Fast TLS request
+        html, code, method = self.fetch_fast_tls(url)
         if html and "Just a moment..." not in html:
             return html, method
 
-        # Retry once if challenge appeared
-        time.sleep(2.0)
-        html, method = self.fetch_browser_stealth(url, timeout_sec=30)
+        # Strategy 2: Persistent Browser Session
+        html, method = self.fetch_browser(url)
         if html and "Just a moment..." not in html:
             return html, method
 
-        return None, "Failed after retry"
+        return None, "Failed to bypass challenge"
 
     def close(self):
         try:
