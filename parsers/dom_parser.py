@@ -9,6 +9,10 @@ class DomParser:
 
     @staticmethod
     def enrich(product: ProductDetail, soup: BeautifulSoup) -> ProductDetail:
+        # Validate existing title (ignore Cloudflare placeholders)
+        if product.title and any(b in product.title.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+            product.title = ""
+
         if not product.title:
             product.title = DomParser._extract_title(soup)
 
@@ -35,8 +39,7 @@ class DomParser:
                 if c not in product.colors:
                     product.colors.append(c)
 
-        # If product has no variants (or only 1 default) but page has multiple color/size swatches:
-        # Extract swatch-based variants so every color gets its SKU, UPC, and Image!
+        # If product has no variants but page has multiple color/size swatches:
         DomParser._enrich_swatch_variants(product, soup)
 
         if not product.images:
@@ -78,7 +81,6 @@ class DomParser:
     def _enrich_swatch_variants(product: ProductDetail, soup: BeautifulSoup):
         """When JSON-LD doesn't have ProductGroup variants, build them from DOM color/size swatches."""
         if len(product.variants) > 1:
-            # Already has rich variants from ProductGroup
             return
 
         html_text = str(soup)
@@ -96,16 +98,13 @@ class DomParser:
                 continue
             seen_colors.add(color_name)
 
-            # Find SKU from background-image url or data attributes
             style_attr = el.get("style", "")
             sku_match = re.search(r"scheelspoc/(\d+)", style_attr)
             variant_sku = sku_match.group(1) if sku_match else None
 
-            # Full image url
             img_match = re.search(r'url\("([^"]+)"\)', style_attr)
             img_url = img_match.group(1).split("?")[0] if img_match else None
 
-            # Look for 12-digit UPC starting with variant_sku in the HTML
             variant_upc = None
             if variant_sku:
                 upc_match = re.search(rf"\b({variant_sku}\d)\b", html_text)
@@ -128,27 +127,35 @@ class DomParser:
 
         if len(swatch_variants) > 1:
             product.variants = swatch_variants
-            # Also ensure all colors are populated
             product.colors = list(seen_colors)
 
     @staticmethod
     def _extract_title(soup: BeautifulSoup) -> str:
+        # First priority: actual H1 tags
         for sel in [
             "h1.product-title", "h1.pdp-title", "h1.product-name", "h1[data-testid='product-name']",
             "h1.product__title", ".product-detail__title", "h1"
         ]:
             elem = soup.select_one(sel)
             if elem and elem.get_text().strip():
-                return elem.get_text().strip()
+                t = elem.get_text().strip()
+                if not any(b in t.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+                    return t
 
+        # Second priority: Meta tags
         meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "twitter:title"})
         if meta and meta.get("content"):
-            return meta["content"].strip()
+            t = meta["content"].strip()
+            if not any(b in t.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+                return t
 
+        # Third priority: Head title
         if soup.title and soup.title.string:
             title_text = soup.title.string.strip()
             title_text = re.split(r"\|| - | — ", title_text)[0].strip()
-            return title_text
+            if not any(b in title_text.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+                return title_text
+
         return ""
 
     @staticmethod
@@ -243,27 +250,23 @@ class DomParser:
         sizes = []
         colors = []
 
-        # 1. Look for modern Tailwind/React aria labels and swatch attributes
         for el in soup.find_all(["div", "button", "a", "span"]):
             for attr_name, attr_val in el.attrs.items():
                 val_str = str(attr_val).strip()
                 if not val_str:
                     continue
-                # Color pattern (e.g. "color: Black/White", "Color: Nude Tone")
                 color_m = re.match(r"^color:\s*([A-Za-z0-9\s/_\-]+)$", val_str, re.I)
                 if color_m:
                     c_clean = color_m.group(1).strip()
                     if c_clean and len(c_clean) < 40 and c_clean not in colors:
                         colors.append(c_clean)
 
-                # Size pattern (e.g. "sockSize: Large", "size: Medium", "size: 10.5")
                 size_m = re.match(r"^(?:sockSize|size|waist|length|shoeSize):\s*([A-Za-z0-9\.\s/_\-]+?)(?:\s+currently|\s+out|\s+limited|$)", val_str, re.I)
                 if size_m:
                     s_clean = size_m.group(1).strip()
                     if s_clean and len(s_clean) < 25 and s_clean not in sizes:
                         sizes.append(s_clean)
 
-        # 2. Standard CSS Selectors fallback
         size_selectors = [
             "select[name*='size'] option", ".size-selector button", ".size-swatches button",
             "[data-attr='size'] button", ".variant-option-size", "ul.sizes li button",
