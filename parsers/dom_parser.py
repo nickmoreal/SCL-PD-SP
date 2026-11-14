@@ -139,21 +139,21 @@ class DomParser:
             elem = soup.select_one(sel)
             if elem and elem.get_text().strip():
                 t = elem.get_text().strip()
-                if not any(b in t.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+                if not any(b in t.lower() for b in ["just a moment", "attention required", "cloudflare", "live chat", "chat with us"]):
                     return t
 
         # Second priority: Meta tags
         meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "twitter:title"})
         if meta and meta.get("content"):
             t = meta["content"].strip()
-            if not any(b in t.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+            if not any(b in t.lower() for b in ["just a moment", "attention required", "cloudflare", "live chat", "chat with us"]):
                 return t
 
         # Third priority: Head title
         if soup.title and soup.title.string:
             title_text = soup.title.string.strip()
             title_text = re.split(r"\|| - | — ", title_text)[0].strip()
-            if not any(b in title_text.lower() for b in ["just a moment", "attention required", "cloudflare"]):
+            if not any(b in title_text.lower() for b in ["just a moment", "attention required", "cloudflare", "live chat", "chat with us"]):
                 return title_text
 
         return ""
