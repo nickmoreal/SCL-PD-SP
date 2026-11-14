@@ -124,7 +124,7 @@ def _sync_to_sheets(prod_ws, var_ws, products: List[ProductDetail]):
         headers = list(prod_rows[0].keys())
         data_matrix = [headers] + [[r.get(h, "") for h in headers] for r in prod_rows]
         prod_ws.clear()
-        prod_ws.update("A1", data_matrix)
+        prod_ws.update(values=data_matrix, range_name="A1")
 
     # Sync Variants Tab
     variant_rows = []
@@ -163,7 +163,7 @@ def _sync_to_sheets(prod_ws, var_ws, products: List[ProductDetail]):
     ]
     var_matrix = [var_headers] + variant_rows
     var_ws.clear()
-    var_ws.update("A1", var_matrix)
+    var_ws.update(values=var_matrix, range_name="A1")
 
 
 if __name__ == "__main__":
