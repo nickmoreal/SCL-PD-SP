@@ -1,7 +1,13 @@
-
 name: 🕷️ Scheels Daily Product Scraper
 
 on:
+  # ─── AUTOMATIC SCHEDULE ───────────────────────────────────────────────────
+  # Roz raat 9:30 PM IST (4:00 PM UTC) auto chalega
+  # Aap time change karna chahein to: https://crontab.guru/ pe check karo
+  schedule:
+    - cron: '0 16 * * *'   # 4:00 PM UTC = 9:30 PM IST daily
+
+  # ─── MANUAL TRIGGER (Mobile/Browser se button dabao) ─────────────────────
   workflow_dispatch:
     inputs:
       sheet_name:
@@ -17,27 +23,32 @@ jobs:
   scrape:
     name: 🔍 Scrape & Sync to Google Sheets
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
 
     steps:
+      # ── 1. Code checkout ──────────────────────────────────────────────────
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
+      # ── 2. Python setup ───────────────────────────────────────────────────
       - name: 🐍 Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
+      # ── 3. Install Python dependencies ────────────────────────────────────
       - name: 📦 Install Python Packages
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ── 4. Install Playwright browsers ────────────────────────────────────
       - name: 🌐 Install Playwright Chromium Browser
         run: |
           playwright install chromium --with-deps
 
+      # ── 5. Run the scraper ────────────────────────────────────────────────
       - name: 🕷️ Run Scheels Scraper → Google Sheets
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
@@ -46,6 +57,7 @@ jobs:
         run: |
           python sheets_runner.py
 
+      # ── 6. Upload Excel backup as GitHub Artifact ─────────────────────────
       - name: 📗 Upload Excel Backup File
         uses: actions/upload-artifact@v4
         if: always()
@@ -55,6 +67,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+      # ── 7. Show run summary ───────────────────────────────────────────────
       - name: ✅ Run Summary
         if: always()
         run: |
