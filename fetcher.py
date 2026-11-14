@@ -68,16 +68,15 @@ class PageFetcher:
             page.route("**/*", ad_filter)
 
             # Navigate to Scheels URL
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_sec * 1000)
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
 
-            # Wait for content to render / Turnstile to complete
-            for _ in range(10):
+            # Fast title/challenge resolution check
+            for _ in range(12):
                 title = page.title()
                 if title and not any(k in title.lower() for k in ["just a moment", "attention required", "cloudflare", "challenge"]):
                     break
-                time.sleep(1.0)
+                time.sleep(0.25)
 
-            time.sleep(1.2)
             content = page.content()
 
             return content, "Isolated Headless Context"
@@ -89,8 +88,8 @@ class PageFetcher:
                     ctx.close()
                 except Exception:
                     pass
-            # Respectful delay between requests
-            time.sleep(1.2)
+            # Rapid natural jitter between requests
+            time.sleep(0.25)
 
     def close(self):
         try:
